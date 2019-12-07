@@ -1,18 +1,25 @@
 # Linux Threathunting 101
 
+This is simple guide to finding threates with osquery, based on my personal experience and with active adversary simulation. This is designed to be a gentle slope into using OSQuery and is a work in progress. 
+
+## Enumeration
+
+In order to begin hunting we need to understand the estate, the operating systems and the workloads. This aspect of managing your hosts and assets is important before beginning a hunt, we need to evaluate where our biggest risk is. 
+
 Let's work out what we are working with:
 ```
-SELECT * FROM kernel_info; 
+select * from kernel_info; 
 ```
 The Kernel info can be a little obtuse sometimes, let's check the operating system version table
 ```
-SELECT * FROM os_version; 
+select * from os_version; 
 ```
-Let's look at the networks available to us
+Let's look at the networks available to us (Hides loopback addresses)
 ```
 select * from interface_addresses where interface <> "lo"; 
-(Hides loopback addresses)
+```
 
+```
 select cpu_brand, cpu_logical_cores, cpu_physical_cores, physical_memory 
 from system_info;  
 ```
@@ -25,22 +32,22 @@ Parent relationships are important to understand where a process spawned from
 
 Let's find our process: 
 ```
-SELECT * from processes where name LIKE 'osqueryi%';
+select * from processes where name LIKE 'osqueryi%';
 ```
 
 Let's find a process:
 ```
-SELECT pid, parent, name FROM processes;
+select pid, parent, name from processes;
 ```
 
 
 Choose a pid of a process that looks interesting, with this can we create a nice basic EDR visualization:
 ```
 WITH RECURSIVE rc(pid, parent, name) AS (
-SELECT pid, parent, name FROM processes WHERE pid = 447 UNION ALL
-SELECT p.pid, p.parent, p.name FROM processes AS p, rc WHERE p.pid = rc.parent
+select pid, parent, name from processes WHERE pid = 447 UNION ALL
+select p.pid, p.parent, p.name from processes AS p, rc WHERE p.pid = rc.parent
 AND p.pid != 0 )
-SELECT pid, parent, name FROM rc LIMIT 20;
+select pid, parent, name from rc LIMIT 20;
 ```
 The output might look like this:
 
@@ -60,7 +67,7 @@ One useful feature of threathunting using OSQuery is being able to list files an
 Let's list out processes and get their hash so we can check the hash against VirusTotal. This is a simple check for standard issues but would be best scripted. 
 
 ```
-SELECT DISTINCT h.md5, p.name, u.username FROM processes AS p
+select DISTINCT h.md5, p.name, u.username from processes AS p
 INNER JOIN hash AS h ON h.path = p.path INNER JOIN users AS u ON u.uid = p.uid ORDER BY start_time DESC
 LIMIT 5;
 ```
@@ -77,37 +84,40 @@ LIMIT 5;
 ```
 
 
-Finding processes that are running whose binary has been deleted from the disk, attackers will often leave a malicious process running but delete the original binary on disk. This query returns any process whose original binary has been deleted or modified (which could be an indicator of a suspicious process).
+Finding processes that are running whose binary has been deleted from the disk, attackers will often leave a malicious process running but delete the original binary. This query returns any process whose original binary has been deleted or modified (which could be an indicator of a suspicious process).
 ```
-SELECT name, path, pid FROM processes WHERE on_disk = 0;
+select name, path, pid from processes WHERE on_disk = 0;
 ```
 
 Next we'll try a similar query:
 ```
-SELECT ps.pid, ps.name, ps.path, ps.cwd, ps.parent, ps.cmdline, pe.value AS env_path FROM processes AS ps LEFT JOIN process_envs AS pe ON ps.pid=pe.pid AND pe.key='PATH' ORDER BY ps.pid LIMIT 20;
+select ps.pid, ps.name, ps.path, ps.cwd, ps.parent, ps.cmdline, pe.value AS env_path from processes AS ps LEFT JOIN process_envs AS pe ON ps.pid=pe.pid AND pe.key='PATH' ORDER BY ps.pid LIMIT 20;
 ```
-This gives a similar result with the cmd path too. 
+This gives a similar result but includes the cmd path too. 
 
 Lets find  processes are using all of our memory?
 ```
-SELECT pid, name, path, resident_size FROM processes; 
+select pid, name, path, resident_size from processes; 
 ```
 ## Network
 ```
-SELECT DISTINCT process.name, listening.port, listening.address, process.pid FROM processes AS process JOIN listening_ports AS listening ON process.pid = listening.pid;
-+----------------------------------------------+-------+-----------+------+
-| name                                         | port  | address   | pid  |
-+----------------------------------------------+-------+-----------+------+
-| UserEventAgent                               | 0     |           | 300  |
-| secd                                         | 0     |           | 304  |
-| rapportd                                     | 49158 | 0.0.0.0   | 307  |
-| rapportd                                     | 49158 | ::        | 307  |
-| rapportd                                     | 0     | 0.0.0.0   | 307  |
+select DISTINCT process.name, listening.port, listening.address, process.pid from processes AS process JOIN listening_ports AS listening ON process.pid = listening.pid;
 
 ```
-Let's find processes that are listening on certain ports:
 ```
-SELECT DISTINCT processes.name, listening_ports.port, processes.pid FROM listening_ports JOIN processes USING (pid) WHERE listening_ports.port= '22'; 
++----------------------------+-------+-----------+------+
+| name                       | port  | address   | pid  |
++----------------------------+-------+-----------+------+
+| UserEventAgent             | 0     |           | 300  |
+| secd                       | 0     |           | 304  |
+| rapportd                   | 49158 | 0.0.0.0   | 307  |
+| rapportd                   | 49158 | ::        | 307  |
+| rapportd                   | 0     | 0.0.0.0   | 307  |
+
+```
+Let's find processes that are listening on known ports and see if they deviate from the :
+```
+select DISTINCT processes.name, listening_ports.port, processes.pid from listening_ports JOIN processes USING (pid) WHERE listening_ports.port= '22'; 
 ```
 On endpoints with well-defined behavior, the security team can use osquery to find any processes that do not fit within whitelisted network behavior, e.g. a process scp’ing traffic externally when it should only perform HTTP(s) connections outbound
 
@@ -116,7 +126,7 @@ select s.pid, p.name, local_address, remote_address, family, protocol, local_por
 ```
 All processes where the remote port is 443
 ```
-SELECT processes.pid, processes.name, remote_address, remote_port FROM process_open_sockets LEFT JOIN processes ON processes.pid = process_open_sockets.pid WHERE remote_address <> '' AND remote_address != '::' AND remote_address != '127.0.0.1' AND remote_address != '0.0.0.0' AND remote_port = 443 LIMIT 10;
+select processes.pid, processes.name, remote_address, remote_port from process_open_sockets LEFT JOIN processes ON processes.pid = process_open_sockets.pid WHERE remote_address <> '' AND remote_address != '::' AND remote_address != '127.0.0.1' AND remote_address != '0.0.0.0' AND remote_port = 443 LIMIT 10;
 ```
 Which should give us an output like this
 ```
@@ -134,7 +144,7 @@ Which should give us an output like this
 ## Users
 Who's logged into my host right now?
 ```
-SELECT * FROM logged_in_users; 
+select * from logged_in_users; 
 ```
 You'll get an output like this:
 ```
@@ -145,23 +155,33 @@ You'll get an output like this:
 | user | craigjones | ttys000 |      | 1574804450 | 396  |
 | user | craigjones | ttys001 |      | 1574808483 | 1190 |
 +------+------------+---------+------+------------+------+
-```
-Let's find keys on the host, this is a good exercise to see if people are keeping private keys on a server.
 
 ```
-SELECT * FROM user_ssh_keys; 
-SELECT * FROM authorized_keys;
+Who was logged into the host recently.?
+```
+select * from last;
+
 ```
 List shadow users
 ```
 select * from shadow;
 ```
 
+## Keys
+
+Let's find ssh keys on the host, this is a good exercise to see if people are keeping private keys on a server. This also allows us to see if people are using private keys 
+
+```
+select * from user_ssh_keys; 
+select * from authorized_keys;
+```
+
+
 ## Commands
 
 Let's see what commands have been run
 ```
-SELECT * FROM shell_history LIMIT 20;
+select * from shell_history LIMIT 20;
 ```
 You'll get an output like this:
 ```
@@ -177,12 +197,12 @@ You'll get an output like this:
 ```
 Let's focus on commands that have been run as root
 ```
-SELECT * FROM shell_history WHERE uid=0 LIMIT 10; 
+select * from shell_history WHERE uid=0 LIMIT 10; 
 ```
 
 Next, let's see what's been scheduled on this host
 ```
-SELECT * FROM crontab; 
+select * from crontab; 
 ```
 Finding new kernel modules that have loaded
 Running this query periodically and diffing against older results can yield whether or not a new kernel module has loaded: kernel modules can be checked against a whitelist/blacklist and any changes can be scrutinized for rootkits.
@@ -192,7 +212,7 @@ select name from kernel_modules;
 ## Filesystem
 Let's investigate folders in /etc/, each /% that we add to the query path will interate through another level of 
 ```
-SELECT * FROM file WHERE path LIKE '/etc/%'; 
+select * from file WHERE path LIKE '/etc/%'; 
 ```
 Further help - https://osquery.readthedocs.io/
 
@@ -206,7 +226,7 @@ Further help - https://osquery.readthedocs.io/
 - Same can be done with NPM and python packages (if you have devs)
 
 ```
-SELECT name, bundle_name, bundle_version FROM apps ORDER BY last_opened_time DESC LIMIT 5;
+select name, bundle_name, bundle_version from apps ORDER BY last_opened_time DESC LIMIT 5;
 ```
 ## Application loads
 
