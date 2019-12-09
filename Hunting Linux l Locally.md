@@ -1,6 +1,6 @@
 # Linux Threathunting 101
 
-This is simple guide to finding threates with osquery, based on my personal experience and with active adversary simulation. This is designed to be a gentle slope into using OSQuery and is a work in progress. 
+This is simple guide to finding threats with osquery, based on my personal experience and modelled with active adversary simulation. This is designed to be a gentle slope into using OSQuery hunting and is a work in progress. 
 
 ## Enumeration
 
@@ -115,7 +115,7 @@ select DISTINCT process.name, listening.port, listening.address, process.pid fro
 | rapportd                   | 0     | 0.0.0.0   | 307  |
 
 ```
-Let's find processes that are listening on known ports and see if they deviate from the :
+Let's find processes that are listening on known ports and see if they deviate from the known expected port, in this example we’ll look for systems that have processes listening on port 22, in reality we should only have sshd. In some cases the attacker will hide running processes listening on standard ports, if an unusual service is listening on a port >1024 you can be sure that the attacker has root level access:
 ```
 select DISTINCT processes.name, listening_ports.port, processes.pid from listening_ports JOIN processes USING (pid) WHERE listening_ports.port= '22'; 
 ```
@@ -228,6 +228,14 @@ Further help - https://osquery.readthedocs.io/
 ```
 select name, bundle_name, bundle_version from apps ORDER BY last_opened_time DESC LIMIT 5;
 ```
+Increasing the limit can give us a wider view of the applications listed on the system. Look for bundle versions that are different to other systems of the same Operating System type and version. 
+
+One example that I’d seen personally was a single system that had an older version of the sshd (SSH Daemon) listed, this binary was a trojanized version that was designed to push out any login and password in clear text to a hidden file as users logged into the server. 
+
+
+
+
+
 ## Application loads
 
 Are we running apache?
